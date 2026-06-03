@@ -116,3 +116,5 @@ AI-Simultaneous-Translation-Assistant/
 ## 许可证
 
 [MIT](LICENSE)
+
+## 更新日志

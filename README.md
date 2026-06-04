@@ -118,3 +118,4 @@ AI-Simultaneous-Translation-Assistant/
 [MIT](LICENSE)
 
 ## 更新日志
+- 2026-06-03: 项目初始化，搭建前后端架构

@@ -119,3 +119,4 @@ AI-Simultaneous-Translation-Assistant/
 
 ## 更新日志
 - 2026-06-03: 项目初始化，搭建前后端架构
+- 2026-06-04: 集成WebSocket实时通信与阿里云百炼API

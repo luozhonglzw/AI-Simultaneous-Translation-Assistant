@@ -9,13 +9,15 @@
 ![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## 演示
+## 🎬 Demo 视频
 
+**介绍视频 + 整体功能演示**
 
+[Bilibili - 项目介绍与功能演示](https://www.bilibili.com/video/BV1ZnEJ6NErs/?vd_source=d63e396000164f445bfd59e373b239f9)
 
-https://github.com/user-attachments/assets/demo-video-1
+**韩文实时翻译演示**
 
-https://github.com/user-attachments/assets/demo-video-2
+[Bilibili - 韩文翻译演示](https://www.bilibili.com/video/BV1ZnEJ6NEdj/?vd_source=d63e396000164f445bfd59e373b239f9)
 
 ## 功能特性
 

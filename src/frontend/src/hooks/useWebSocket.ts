@@ -113,6 +113,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
   }, []);
 
+  /** 发送任意消息 */
+  const send = useCallback((data: object) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+      return true;
+    }
+    return false;
+  }, []);
+
   /** 注册消息回调 */
   const onMessage = useCallback((callback: (data: any) => void) => {
     messageCallbackRef.current = callback;
@@ -142,6 +151,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     state,
     sendAudio,
     sendConfig,
+    send,
     onMessage,
     disconnect,
     reconnect: connect,

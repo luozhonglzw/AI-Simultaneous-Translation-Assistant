@@ -32,6 +32,7 @@ export default function App() {
     toggleSession,
     clearSubtitles,
     exportSRT,
+    exportSessionTxt,
     generateSessionTitle,
     showHint,
   } = useCorrection();
@@ -109,6 +110,7 @@ export default function App() {
         onDeleteSession={deleteSession}
         onClear={clearSubtitles}
         generateTitle={generateSessionTitle}
+        exportSessionTxt={exportSessionTxt}
       />
 
       <div className="flex-1 flex flex-col min-w-0">

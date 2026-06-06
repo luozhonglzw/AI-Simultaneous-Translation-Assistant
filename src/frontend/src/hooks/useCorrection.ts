@@ -356,6 +356,41 @@ export function useCorrection() {
     localStorage.removeItem(STORAGE_KEY);
   }, []);
 
+  /** 导出单个会话为 TXT（纯前端，和 SRT 一样直接下载） */
+  const exportSessionTxt = useCallback((sessionId: string, mode: 'original_first' | 'bilingual' | 'translation_only' = 'bilingual') => {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    const items = session.items.filter((item) => item.translated?.trim() && item.translated.trim().length > 2);
+    if (items.length === 0) return;
+
+    const ts = new Date().toLocaleString('zh-CN');
+    let content = '';
+
+    if (mode === 'original_first') {
+      content = `翻译记录\r\n导出时间: ${ts}\r\n\r\n══════ 原文 ══════\r\n\r\n`;
+      items.forEach((it, i) => { content += `${i + 1}. ${it.original}\r\n`; });
+      content += `\r\n══════ 译文 ══════\r\n\r\n`;
+      items.forEach((it, i) => { content += `${i + 1}. ${it.translated}\r\n`; });
+    } else if (mode === 'bilingual') {
+      content = `翻译记录（双语对照）\r\n导出时间: ${ts}\r\n\r\n`;
+      items.forEach((it, i) => {
+        content += `[${i + 1}] 原文: ${it.original}\r\n    译文: ${it.translated}\r\n\r\n`;
+      });
+    } else {
+      content = `翻译记录\r\n导出时间: ${ts}\r\n\r\n`;
+      items.forEach((it, i) => { content += `${i + 1}. ${it.translated}\r\n`; });
+    }
+
+    const filename = `翻译_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)}.txt`;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    return true;
+  }, [sessions]);
+
   const exportSRT = useCallback((): SubtitleEntry[] => {
     const allItems = sessions.flatMap((s) => s.items);
     return allItems.map((item, i) => ({
@@ -378,6 +413,7 @@ export function useCorrection() {
     toggleSession,
     clearSubtitles,
     exportSRT,
+    exportSessionTxt,
     generateSessionTitle,
     showHint,
   };

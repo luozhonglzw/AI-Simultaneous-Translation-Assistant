@@ -1,6 +1,6 @@
 # AI 同声传译助手
 
-实时 AI 同声传译，将外语音频流翻译成中文字幕，支持自动纠错。
+实时 AI 同声传译，将外语音频流翻译成中文字幕，支持自动纠错。基于 Multi-Agent 消息总线架构，各模块独立运行、自主决策。
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript)
@@ -9,25 +9,41 @@
 ![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## 演示
+
+
+
+https://github.com/user-attachments/assets/demo-video-1
+
+https://github.com/user-attachments/assets/demo-video-2
+
 ## 功能特性
 
-- **实时翻译**：端到端延迟 2-3 秒，流式处理
+- **实时翻译**：端到端延迟 2-3 秒，流式输出
 - **自动纠错**：后续上下文揭示前文错误时自动修正已显示的字幕
 - **多语言支持**：英语、日语、韩语、法语、德语 → 中文
 - **语音播报**：可选 TTS 中文语音输出
+- **会话管理**：自动创建会话、历史记录、会话折叠/展开
+- **文档导出**：支持 TXT / Word (DOCX) 导出，三种排版模式（双语对照、原文优先、仅译文）
 - **字幕导出**：一键导出 SRT 字幕文件
+- **环境音过滤**：自动识别掌声、背景音乐等非语音内容
 - **深色主题**：玻璃态 UI，响应式设计
 
 ## 架构
 
 ```
-音频输入 → 3秒分段 → Base64编码 → WebSocket → 后端
-                                              ↓
-后端音频缓冲区 → 百炼 Qwen-Omni API（流式）→ 中文翻译文本
-                                              ↓
-                              修正引擎（上下文一致性检查）
-                                              ↓
-                              WebSocket 推送 → 前端字幕渲染
+                        ┌─────────────────────────────────┐
+                        │        Multi-Agent 消息总线        │
+                        │       (AgentCoordinator)         │
+                        └──────┬──────┬──────┬──────┬──────┘
+                               │      │      │      │
+                    ┌──────────▼┐ ┌───▼────┐ ┌▼─────┐ ┌▼──────────┐
+                    │ Agent 1   │ │Agent 2 │ │Agent 3│ │ Agent 4   │
+                    │ 音频监听   │ │ 翻译   │ │ 组装  │ │ 文档导出   │
+                    │ WAV解码    │ │ LRU缓存 │ │ 断句  │ │ TXT/DOCX  │
+                    │ 特征提取   │ │ 限流    │ │ 缓冲  │ │ 纯前端    │
+                    │ 分类过滤   │ │ 重试    │ │       │ │           │
+                    └───────────┘ └────────┘ └───────┘ └───────────┘
 ```
 
 ## 技术栈
@@ -37,7 +53,9 @@
 | 前端 | React 18 + TypeScript + Tailwind CSS + Vite |
 | 后端 | Node.js + Express + WebSocket (ws) |
 | AI 服务 | 阿里云百炼 Qwen-Omni-Turbo（音频多模态） |
-| 音频处理 | Web Audio API + MediaRecorder |
+| 音频处理 | Web Audio API + MediaRecorder + SemanticAudioBuffer |
+| 文档导出 | docx + file-saver（纯前端生成） |
+| 架构模式 | Multi-Agent 消息总线（EventEmitter + 消息队列） |
 
 ## 本地运行
 
@@ -91,21 +109,28 @@ npm run dev
 ```
 AI-Simultaneous-Translation-Assistant/
 ├── README.md
-├── demo/
+├── demo-video/                # 演示视频
 ├── src/
-│   ├── frontend/          # React 前端
+│   ├── frontend/              # React 前端
 │   │   ├── src/
-│   │   │   ├── components/
-│   │   │   ├── hooks/
-│   │   │   ├── services/
+│   │   │   ├── components/    # AudioCapture, SubtitleDisplay, TranslationHistory ...
+│   │   │   ├── hooks/         # useWebSocket, useCorrection
+│   │   │   ├── services/      # audioClassifier, subtitleExporter
+│   │   │   ├── utils/         # docxGenerator（前端 DOCX 生成）
 │   │   │   ├── App.tsx
 │   │   │   └── main.tsx
 │   │   └── ...
-│   └── backend/           # Node.js 后端
+│   └── backend/               # Node.js 后端
 │       ├── src/
+│       │   ├── agents/        # Multi-Agent 系统
+│       │   │   ├── BaseAgent.ts
+│       │   │   ├── AgentCoordinator.ts
+│       │   │   ├── AudioListenerAgent.ts
+│       │   │   ├── TranslatorAgent.ts
+│       │   │   ├── AssemblerAgent.ts
+│       │   │   └── DocumentExportAgent.ts
 │       │   ├── server.ts
 │       │   ├── services/
-│       │   ├── utils/
 │       │   └── types/
 │       └── ...
 ├── .env.example

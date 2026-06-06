@@ -1,21 +1,21 @@
 /**
  * AI 同声传译助手 - 后端服务器
- * 翻译管道（实时，不阻塞） + 修正管道（后台队列）
+ * 真正的 Multi-Agent 架构：
+ *   每个 Agent 独立运行，通过消息总线异步通信，自主决策
  */
 
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import dotenv from 'dotenv';
-import { AudioBufferManager } from './utils/audioBuffer.js';
-import {
-  translateAudio,
-  translateAudioNonStream,
-  transcribeAudio,
-} from './services/unifiedAIService.js';
-import type { AudioMessage, ConfigMessage } from './types/index.js';
+import { AgentCoordinator } from './agents/AgentCoordinator.js';
+import { AudioListenerAgent } from './agents/AudioListenerAgent.js';
+import { TranslatorAgent } from './agents/TranslatorAgent.js';
+import { AssemblerAgent } from './agents/AssemblerAgent.js';
+import { DocumentExportAgent } from './agents/DocumentExportAgent.js';
+import type { ConfigMessage } from './types/index.js';
 
 dotenv.config({ path: '../../.env' });
 
@@ -36,70 +36,29 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: Date.n
 const httpServer = createServer(app);
 httpServer.listen(HTTP_PORT, () => console.log(`[HTTP] http://localhost:${HTTP_PORT}`));
 
+// ─── Multi-Agent 系统 ───
+const coordinator = new AgentCoordinator();
+
+const audioListener = new AudioListenerAgent();
+const translator = new TranslatorAgent(API_KEY);
+const assembler = new AssemblerAgent();
+const exporter = new DocumentExportAgent();
+
+coordinator.registerAgent(audioListener);
+coordinator.registerAgent(translator);
+coordinator.registerAgent(assembler);
+coordinator.registerAgent(exporter);
+
+coordinator.startAll();
+
 // ─── WebSocket ───
-const wss = new WebSocketServer({ port: WS_PORT });
-const audioBuffer = new AudioBufferManager();
-const clientLanguages = new Map<WebSocket, string>();
+const wss = new WebSocketServer({ port: WS_PORT, maxPayload: 10 * 1024 * 1024 });
+let clientCounter = 0;
 
-let segmentCounter = 0;
-
-function broadcast(data: string) {
-  wss.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(data); });
-}
-
-function sendTo(client: WebSocket, data: object) {
-  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(data));
-}
-
-// ─── 修正队列（后台，不阻塞翻译流） ───
-interface CorrectionTask {
-  segmentId: string;
-  audioBase64: string;
-  originalText: string;
-  contextTexts: string[];
-}
-
-const correctionQueue: CorrectionTask[] = [];
-
-// 后台修正处理：每 500ms 处理一批（最多 2 个）
-const CORRECTION_INTERVAL = 500;
-const CORRECTION_BATCH_SIZE = 2;
-
-setInterval(async () => {
-  if (correctionQueue.length === 0) return;
-  const batch = correctionQueue.splice(0, CORRECTION_BATCH_SIZE);
-
-  await Promise.all(batch.map(async (task) => {
-    try {
-      console.log(`[修正] 后台重新翻译: ${task.segmentId}`);
-      const corrected = await translateAudioNonStream(
-        task.audioBase64,
-        API_KEY,
-        { context: task.contextTexts, mode: 'accurate' }
-      );
-
-      if (corrected && corrected !== task.originalText) {
-        console.log(`[修正] ${task.segmentId}: "${task.originalText.substring(0, 40)}" → "${corrected.substring(0, 40)}"`);
-        broadcast(JSON.stringify({
-          type: 'correction',
-          segmentId: task.segmentId,
-          oldText: task.originalText,
-          newText: corrected,
-          reason: '后台精修',
-        }));
-      } else {
-        console.log(`[修正] ${task.segmentId}: 无变化`);
-      }
-    } catch (err: any) {
-      console.error(`[修正] 失败 ${task.segmentId}:`, err.message);
-    }
-  }));
-}, CORRECTION_INTERVAL);
-
-// ─── WebSocket 连接处理 ───
 wss.on('connection', (ws) => {
-  console.log('[WS] 新客户端连接');
-  clientLanguages.set(ws, 'en');
+  const clientId = `client-${++clientCounter}`;
+  console.log(`[WS] 新客户端: ${clientId}`);
+  coordinator.addClient(clientId, ws);
 
   let alive = true;
   const heartbeat = setInterval(() => {
@@ -113,94 +72,61 @@ wss.on('connection', (ws) => {
     try {
       const msg = JSON.parse(raw.toString());
 
-      if (msg.type === 'ping') { sendTo(ws, { type: 'pong', timestamp: Date.now() }); return; }
+      if (msg.type === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+        return;
+      }
 
       if (msg.type === 'config') {
         const configMsg = msg as ConfigMessage;
-        clientLanguages.set(ws, configMsg.sourceLanguage);
-        console.log(`[WS] 语言设置: ${configMsg.sourceLanguage}`);
+        coordinator.setClientLanguage(clientId, configMsg.sourceLanguage);
+        console.log(`[WS] ${clientId} 语言: ${configMsg.sourceLanguage}`);
         return;
       }
 
       if (msg.type === 'audio') {
-        const audioMsg = msg as AudioMessage;
-        const segmentId = audioMsg.segmentId || `seg-${++segmentCounter}`;
+        const segmentId = msg.segmentId || `seg-${Date.now()}`;
+        // 音频交给 Agent 系统处理
+        coordinator.handleAudio(clientId, msg.payload, segmentId);
+      }
 
-        // 调试保存
-        try {
-          let b64 = audioMsg.payload;
-          if (b64.startsWith('data:')) b64 = b64.substring(b64.indexOf(',') + 1);
-          writeFileSync(`${TEMP_DIR}/debug-audio-${Date.now()}.wav`, Buffer.from(b64, 'base64'));
-        } catch {}
-
-        // 存入音频缓冲
-        audioBuffer.append({ id: segmentId, data: audioMsg.payload, timestamp: audioMsg.timestamp, duration: 3 });
-
-        // 获取上下文
-        const contextTexts = audioBuffer.getContext(2).map((s) => s.id); // 简化上下文
-        const sourceLang = clientLanguages.get(ws) || 'en';
-
-        // ─── 主翻译管道（立即执行，不阻塞） ───
-        let fullText = '';
-        let originalText = '';
-
-        // 并行：转录 + 流式翻译
-        const transcribePromise = transcribeAudio(audioMsg.payload, API_KEY).then((t) => { originalText = t; });
-
-        try {
-          for await (const chunk of translateAudio(audioMsg.payload, API_KEY, { sourceLanguage: sourceLang, mode: 'fast' })) {
-            fullText += chunk;
-            sendTo(ws, {
-              type: 'translation',
-              segmentId,
-              text: chunk,
-              original: '',
-              isFinal: false,
-              status: 'live',
-            });
-          }
-        } catch (apiErr: any) {
-          console.error('[翻译] 失败:', apiErr.message);
-          sendTo(ws, { type: 'error', message: `翻译失败: ${apiErr.message}` });
-          return;
-        }
-
-        await transcribePromise;
-
-        // 发送最终结果
-        sendTo(ws, {
-          type: 'translation',
-          segmentId,
-          text: fullText,
-          original: originalText,
-          isFinal: true,
-          status: 'live',
-        });
-
-        console.log(`[翻译] ${segmentId}: ${fullText.substring(0, 60)}`);
-
-        // ─── 加入修正队列（后台处理） ───
-        correctionQueue.push({
-          segmentId,
-          audioBase64: audioMsg.payload,
-          originalText: fullText,
-          contextTexts: [],
-        });
+      if (msg.type === 'export_request') {
+        // 导出请求交给 Agent 4
+        console.log(`[WS] ${clientId} 导出请求: session=${msg.sessionId} format=${msg.format} mode=${msg.mode} items=${msg.items?.length}`);
+        coordinator.handleExport(clientId, msg);
       }
     } catch (err) {
       console.error('[WS] 错误:', err);
-      sendTo(ws, { type: 'error', message: '处理失败，请重试' });
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', message: '处理失败，请重试' }));
+      }
     }
   });
 
-  ws.on('close', () => { clearInterval(heartbeat); clientLanguages.delete(ws); console.log('[WS] 客户端断开'); });
-  ws.on('error', (err) => { console.error('[WS] 错误:', err); clearInterval(heartbeat); clientLanguages.delete(ws); });
+  ws.on('close', () => {
+    clearInterval(heartbeat);
+    coordinator.removeClient(clientId);
+    console.log(`[WS] 客户端断开: ${clientId}`);
+  });
+
+  ws.on('error', (err) => {
+    console.error('[WS] 错误:', err);
+    clearInterval(heartbeat);
+    coordinator.removeClient(clientId);
+  });
 });
 
 console.log(`[WS] ws://localhost:${WS_PORT}`);
-console.log('[启动] 后端已就绪');
+console.log('[启动] 后端已就绪（Multi-Agent 消息总线架构）');
 
-// API 预热：启动时发一个请求建立连接
+// 优雅关闭
+process.on('SIGINT', () => {
+  console.log('\n[关闭] 停止所有 Agent...');
+  coordinator.stopAll();
+  process.exit(0);
+});
+
+// API 预热
 (async () => {
   try {
     const baseUrl = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
